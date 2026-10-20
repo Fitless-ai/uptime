@@ -1,0 +1,51 @@
+# Monitor externo do Fitless. Mora num repo público porque Actions é ilimitado
+# aqui (no repo privado a cada 5 min estoura a cota do plano Free). Falhou =
+# o GitHub manda e-mail para quem mexeu por último no cron.
+name: uptime
+
+on:
+  schedule:
+    - cron: "2-59/5 * * * *"   # fora do minuto cheio, quando o agendador do GitHub atrasa mais
+    - cron: "17 12 1 * *"      # keepalive mensal
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+env:
+  CURL: curl -fsS --retry 3 --retry-delay 10 --retry-all-errors --max-time 15
+
+jobs:
+  check:
+    if: github.event.schedule != '17 12 1 * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: www (web + PostgREST + banco)
+        run: |
+          body=$($CURL https://www.fitless.ai/api/health)
+          echo "$body"
+          echo "$body" | grep -q '"ok":true'
+      - name: app
+        if: ${{ !cancelled() }}
+        run: $CURL -o /dev/null https://app.fitless.ai/
+      - name: api (auth)
+        if: ${{ !cancelled() }}
+        env:
+          ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          $CURL -o /dev/null -H "apikey: $ANON_KEY" https://api.fitless.ai/auth/v1/health
+
+  # o GitHub desliga workflow agendado de repo público depois de 60 dias sem atividade
+  keepalive:
+    if: github.event.schedule == '17 12 1 * *'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/uptime.yml/enable"
